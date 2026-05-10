@@ -6,6 +6,7 @@ const cors = require("cors");
 require("dotenv").config();
 
 const User = require("./models/User");
+const Task = require("./models/Task");
 
 const app = express();
 
@@ -13,6 +14,7 @@ const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI;
 const JWT_SECRET = process.env.JWT_SECRET;
 
+// Middleware
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -49,11 +51,12 @@ function authenticateToken(req, res, next) {
         });
     }
 
-    const token = authHeader.split(" ")[1];
+    const tokenParts = authHeader.split(" ");
+    const token = tokenParts[1];
 
-    if (!token) {
+    if (!token || tokenParts[0] !== "Bearer") {
         return res.status(401).json({
-            message: "Token is required"
+            message: "Token is required. Use format: Authorization: Bearer TOKEN"
         });
     }
 
@@ -65,9 +68,7 @@ function authenticateToken(req, res, next) {
 
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
-
         req.user = decoded;
-
         next();
     } catch (error) {
         return res.status(401).json({
@@ -234,6 +235,14 @@ app.get("/profile", authenticateToken, async function (req, res) {
     });
 });
 
+// Optional /user route
+app.get("/user", authenticateToken, async function (req, res) {
+    res.json({
+        message: "User route accessed successfully",
+        user: req.user
+    });
+});
+
 // Admin-only route
 app.get("/admin", authenticateToken, authorizeAdmin, function (req, res) {
     res.json({
@@ -263,7 +272,12 @@ app.get("/blacklist-count", function (req, res) {
     });
 });
 
-// Search users by name
+/*
+|--------------------------------------------------------------------------
+| USER SEARCH ROUTE
+|--------------------------------------------------------------------------
+*/
+
 app.get("/users/search", authenticateToken, async function (req, res) {
     try {
         const name = req.query.name;
@@ -300,6 +314,296 @@ app.get("/users/search", authenticateToken, async function (req, res) {
     }
 });
 
+/*
+|--------------------------------------------------------------------------
+| TASK ROUTES
+|--------------------------------------------------------------------------
+*/
+
+// Create task for logged-in user
+app.post("/api/tasks", authenticateToken, async function (req, res) {
+    try {
+        const title = req.body.title;
+        const category = req.body.category || "Personal";
+        const userId = req.user.id;
+
+        if (!title || title.trim() === "") {
+            return res.status(400).json({
+                message: "Task title is required"
+            });
+        }
+
+        if (!["Work", "Personal", "Urgent"].includes(category)) {
+            return res.status(400).json({
+                message: "Category must be Work, Personal, or Urgent"
+            });
+        }
+
+        const task = await Task.create({
+            title: title.trim(),
+            category: category,
+            completed: false,
+            userId: userId
+        });
+
+        res.status(201).json({
+            message: "Task created successfully",
+            task: task
+        });
+    } catch (error) {
+        res.status(500).json({
+            message: "Failed to create task",
+            error: error.message
+        });
+    }
+});
+
+// Get logged-in user's tasks sorted by creation date
+app.get("/api/tasks", authenticateToken, async function (req, res) {
+    try {
+        const userId = req.user.id;
+        const sortOrder = req.query.sort === "oldest" ? 1 : -1;
+
+        const tasks = await Task.find({ userId: userId })
+            .sort({ createdAt: sortOrder });
+
+        res.json({
+            message: "Tasks fetched successfully",
+            sort: sortOrder === 1 ? "oldest" : "newest",
+            totalTasks: tasks.length,
+            tasks: tasks
+        });
+    } catch (error) {
+        res.status(500).json({
+            message: "Failed to fetch tasks",
+            error: error.message
+        });
+    }
+});
+
+// Get one task by id for logged-in user
+app.get("/api/tasks/:id", authenticateToken, async function (req, res) {
+    try {
+        const taskId = req.params.id;
+        const userId = req.user.id;
+
+        if (!mongoose.Types.ObjectId.isValid(taskId)) {
+            return res.status(400).json({
+                message: "Invalid task id"
+            });
+        }
+
+        const task = await Task.findOne({
+            _id: taskId,
+            userId: userId
+        });
+
+        if (!task) {
+            return res.status(404).json({
+                message: "Task not found for this user"
+            });
+        }
+
+        res.json({
+            message: "Task fetched successfully",
+            task: task
+        });
+    } catch (error) {
+        res.status(500).json({
+            message: "Failed to fetch task",
+            error: error.message
+        });
+    }
+});
+
+// Edit task title/category for logged-in user
+app.put("/api/tasks/:id", authenticateToken, async function (req, res) {
+    try {
+        const taskId = req.params.id;
+        const userId = req.user.id;
+        const title = req.body.title;
+        const category = req.body.category;
+
+        if (!mongoose.Types.ObjectId.isValid(taskId)) {
+            return res.status(400).json({
+                message: "Invalid task id"
+            });
+        }
+
+        if (!title || title.trim() === "") {
+            return res.status(400).json({
+                message: "Task title is required"
+            });
+        }
+
+        if (category && !["Work", "Personal", "Urgent"].includes(category)) {
+            return res.status(400).json({
+                message: "Category must be Work, Personal, or Urgent"
+            });
+        }
+
+        const updateData = {
+            title: title.trim()
+        };
+
+        if (category) {
+            updateData.category = category;
+        }
+
+        const updatedTask = await Task.findOneAndUpdate(
+            {
+                _id: taskId,
+                userId: userId
+            },
+            updateData,
+            {
+                new: true,
+                runValidators: true
+            }
+        );
+
+        if (!updatedTask) {
+            return res.status(404).json({
+                message: "Task not found for this user"
+            });
+        }
+
+        res.json({
+            message: "Task updated successfully",
+            task: updatedTask
+        });
+    } catch (error) {
+        res.status(500).json({
+            message: "Failed to update task",
+            error: error.message
+        });
+    }
+});
+
+// Mark task as completed for logged-in user
+app.patch("/api/tasks/:id/complete", authenticateToken, async function (req, res) {
+    try {
+        const taskId = req.params.id;
+        const userId = req.user.id;
+
+        if (!mongoose.Types.ObjectId.isValid(taskId)) {
+            return res.status(400).json({
+                message: "Invalid task id"
+            });
+        }
+
+        const updatedTask = await Task.findOneAndUpdate(
+            {
+                _id: taskId,
+                userId: userId
+            },
+            {
+                completed: true
+            },
+            {
+                new: true,
+                runValidators: true
+            }
+        );
+
+        if (!updatedTask) {
+            return res.status(404).json({
+                message: "Task not found for this user"
+            });
+        }
+
+        res.json({
+            message: "Task marked as completed",
+            task: updatedTask
+        });
+    } catch (error) {
+        res.status(500).json({
+            message: "Failed to complete task",
+            error: error.message
+        });
+    }
+});
+
+// Mark task as pending again for logged-in user
+app.patch("/api/tasks/:id/pending", authenticateToken, async function (req, res) {
+    try {
+        const taskId = req.params.id;
+        const userId = req.user.id;
+
+        if (!mongoose.Types.ObjectId.isValid(taskId)) {
+            return res.status(400).json({
+                message: "Invalid task id"
+            });
+        }
+
+        const updatedTask = await Task.findOneAndUpdate(
+            {
+                _id: taskId,
+                userId: userId
+            },
+            {
+                completed: false
+            },
+            {
+                new: true,
+                runValidators: true
+            }
+        );
+
+        if (!updatedTask) {
+            return res.status(404).json({
+                message: "Task not found for this user"
+            });
+        }
+
+        res.json({
+            message: "Task marked as pending",
+            task: updatedTask
+        });
+    } catch (error) {
+        res.status(500).json({
+            message: "Failed to mark task as pending",
+            error: error.message
+        });
+    }
+});
+
+// Delete task for logged-in user
+app.delete("/api/tasks/:id", authenticateToken, async function (req, res) {
+    try {
+        const taskId = req.params.id;
+        const userId = req.user.id;
+
+        if (!mongoose.Types.ObjectId.isValid(taskId)) {
+            return res.status(400).json({
+                message: "Invalid task id"
+            });
+        }
+
+        const deletedTask = await Task.findOneAndDelete({
+            _id: taskId,
+            userId: userId
+        });
+
+        if (!deletedTask) {
+            return res.status(404).json({
+                message: "Task not found for this user"
+            });
+        }
+
+        res.json({
+            message: "Task deleted successfully",
+            task: deletedTask
+        });
+    } catch (error) {
+        res.status(500).json({
+            message: "Failed to delete task",
+            error: error.message
+        });
+    }
+});
+
+// Start server
 app.listen(PORT, function () {
     console.log("Auth API is running on http://localhost:" + PORT);
 });
