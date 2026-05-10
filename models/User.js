@@ -11,16 +11,12 @@ const userSchema = new mongoose.Schema(
             type: String,
             required: true,
             trim: true,
-            lowercase: true
+            lowercase: true,
+            unique: true
         },
-        age: {
-            type: Number,
-            required: true,
-            min: 1
-        },
-        isActive: {
-            type: Boolean,
-            default: true
+        password: {
+            type: String,
+            required: true
         },
         role: {
             type: String,
