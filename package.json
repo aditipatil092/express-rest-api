@@ -1,7 +1,7 @@
 {
   "name": "day11-server",
   "version": "1.0.0",
-  "description": "Simple Express server project",
+  "description": "Database connected Express REST API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -10,7 +10,9 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "dotenv": "^17.2.3",
     "express": "^5.1.0",
-    "moment": "^2.30.1"
+    "moment": "^2.30.1",
+    "mongoose": "^8.20.0"
   }
 }
