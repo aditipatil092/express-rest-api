@@ -15,11 +15,17 @@ const userSchema = new mongoose.Schema(
         },
         age: {
             type: Number,
-            required: true
+            required: true,
+            min: 1
         },
         isActive: {
             type: Boolean,
             default: true
+        },
+        role: {
+            type: String,
+            enum: ["admin", "user"],
+            default: "user"
         }
     },
     {

@@ -1,7 +1,7 @@
 const express = require("express");
 const moment = require("moment");
-const path = require("path");
 const mongoose = require("mongoose");
+const path = require("path");
 require("dotenv").config();
 
 const User = require("./models/User");
@@ -17,7 +17,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
 
-// Database connection
+// MongoDB connection
 mongoose
     .connect(MONGO_URI)
     .then(function () {
@@ -27,22 +27,18 @@ mongoose
         console.error("MongoDB connection failed:", error.message);
     });
 
-// Home route
+// Basic routes
 app.get("/", function (req, res) {
     res.send("Hello Server is running!");
 });
 
-// Time route
 app.get("/time", function (req, res) {
-    const currentDateTime = moment().format("DD-MM-YYYY hh:mm:ss A");
-
     res.json({
         message: "Current date and time",
-        dateTime: currentDateTime
+        dateTime: moment().format("DD-MM-YYYY hh:mm:ss A")
     });
 });
 
-// Basic API route
 app.get("/api", function (req, res) {
     res.json({
         message: "Hello from API",
@@ -51,7 +47,6 @@ app.get("/api", function (req, res) {
     });
 });
 
-// Weather route
 app.get("/weather/:city", function (req, res) {
     const city = req.params.city;
 
@@ -61,7 +56,6 @@ app.get("/weather/:city", function (req, res) {
     });
 });
 
-// Contact page
 app.get("/contact", function (req, res) {
     res.sendFile(path.join(__dirname, "public", "contact.html"));
 });
@@ -79,6 +73,7 @@ app.post("/api/users", async function (req, res) {
         const email = req.body.email;
         const age = Number(req.body.age);
         const isActive = req.body.isActive === undefined ? true : req.body.isActive;
+        const role = req.body.role || "user";
 
         if (!name || name.trim() === "") {
             return res.status(400).json({
@@ -92,9 +87,15 @@ app.post("/api/users", async function (req, res) {
             });
         }
 
-        if (!age || age <= 0) {
+        if (isNaN(age) || age <= 0) {
             return res.status(400).json({
                 message: "Valid age is required"
+            });
+        }
+
+        if (!["admin", "user"].includes(role)) {
+            return res.status(400).json({
+                message: "Role must be either admin or user"
             });
         }
 
@@ -102,7 +103,8 @@ app.post("/api/users", async function (req, res) {
             name: name.trim(),
             email: email.trim(),
             age: age,
-            isActive: isActive
+            isActive: isActive,
+            role: role
         });
 
         res.status(201).json({
@@ -117,7 +119,7 @@ app.post("/api/users", async function (req, res) {
     }
 });
 
-// Get all active users only
+// Get only active users
 app.get("/api/users", async function (req, res) {
     try {
         const users = await User.find({ isActive: true });
@@ -130,6 +132,27 @@ app.get("/api/users", async function (req, res) {
     } catch (error) {
         res.status(500).json({
             message: "Failed to fetch users",
+            error: error.message
+        });
+    }
+});
+
+// Fetch all admin users
+app.get("/users/admins", async function (req, res) {
+    try {
+        const admins = await User.find({
+            role: "admin",
+            isActive: true
+        });
+
+        res.json({
+            message: "Admin users fetched successfully",
+            totalAdmins: admins.length,
+            users: admins
+        });
+    } catch (error) {
+        res.status(500).json({
+            message: "Failed to fetch admin users",
             error: error.message
         });
     }
@@ -165,52 +188,6 @@ app.get("/users/search", async function (req, res) {
     }
 });
 
-// Get adult users
-app.get("/users/adults", async function (req, res) {
-    try {
-        const users = await User.find({
-            age: { $gte: 18 },
-            isActive: true
-        });
-
-        res.json({
-            message: "Adult active users fetched successfully",
-            totalUsers: users.length,
-            users: users
-        });
-    } catch (error) {
-        res.status(500).json({
-            message: "Failed to fetch adult users",
-            error: error.message
-        });
-    }
-});
-
-// Get only emails of active users
-app.get("/users/emails", async function (req, res) {
-    try {
-        const users = await User.find(
-            { isActive: true },
-            { email: 1, _id: 0 }
-        );
-
-        const emails = users.map(function (user) {
-            return user.email;
-        });
-
-        res.json({
-            message: "Active user emails fetched successfully",
-            totalEmails: emails.length,
-            emails: emails
-        });
-    } catch (error) {
-        res.status(500).json({
-            message: "Failed to fetch user emails",
-            error: error.message
-        });
-    }
-});
-
 // Fetch users older than given age
 app.get("/users/age/:min", async function (req, res) {
     try {
@@ -241,9 +218,89 @@ app.get("/users/age/:min", async function (req, res) {
     }
 });
 
+// Return average age of users
+app.get("/users/average-age", async function (req, res) {
+    try {
+        const result = await User.aggregate([
+            {
+                $group: {
+                    _id: null,
+                    averageAge: { $avg: "$age" },
+                    totalUsers: { $sum: 1 }
+                }
+            }
+        ]);
+
+        if (result.length === 0) {
+            return res.json({
+                message: "No users found",
+                averageAge: 0,
+                totalUsers: 0
+            });
+        }
+
+        res.json({
+            message: "Average age calculated successfully",
+            averageAge: Number(result[0].averageAge.toFixed(2)),
+            totalUsers: result[0].totalUsers
+        });
+    } catch (error) {
+        res.status(500).json({
+            message: "Failed to calculate average age",
+            error: error.message
+        });
+    }
+});
+
+// Adult active users
+app.get("/users/adults", async function (req, res) {
+    try {
+        const users = await User.find({
+            age: { $gte: 18 },
+            isActive: true
+        });
+
+        res.json({
+            message: "Adult active users fetched successfully",
+            totalUsers: users.length,
+            users: users
+        });
+    } catch (error) {
+        res.status(500).json({
+            message: "Failed to fetch adult users",
+            error: error.message
+        });
+    }
+});
+
+// Active user emails
+app.get("/users/emails", async function (req, res) {
+    try {
+        const users = await User.find(
+            { isActive: true },
+            { email: 1, _id: 0 }
+        );
+
+        const emails = users.map(function (user) {
+            return user.email;
+        });
+
+        res.json({
+            message: "Active user emails fetched successfully",
+            totalEmails: emails.length,
+            emails: emails
+        });
+    } catch (error) {
+        res.status(500).json({
+            message: "Failed to fetch user emails",
+            error: error.message
+        });
+    }
+});
+
 /*
 |--------------------------------------------------------------------------
-| PRODUCT ROUTES - CRUD
+| PRODUCT CRUD ROUTES
 |--------------------------------------------------------------------------
 */
 
@@ -252,7 +309,7 @@ app.post("/api/products", async function (req, res) {
     try {
         const name = req.body.name;
         const price = Number(req.body.price);
-        const category = req.body.category;
+        const stock = Number(req.body.stock);
 
         if (!name || name.trim() === "") {
             return res.status(400).json({
@@ -266,16 +323,16 @@ app.post("/api/products", async function (req, res) {
             });
         }
 
-        if (!category || category.trim() === "") {
+        if (isNaN(stock) || stock < 0) {
             return res.status(400).json({
-                message: "Product category is required"
+                message: "Valid product stock is required"
             });
         }
 
         const product = await Product.create({
             name: name.trim(),
             price: price,
-            category: category.trim()
+            stock: stock
         });
 
         res.status(201).json({
@@ -313,6 +370,12 @@ app.get("/api/products/:id", async function (req, res) {
     try {
         const productId = req.params.id;
 
+        if (!mongoose.Types.ObjectId.isValid(productId)) {
+            return res.status(400).json({
+                message: "Invalid product id"
+            });
+        }
+
         const product = await Product.findById(productId);
 
         if (!product) {
@@ -338,9 +401,15 @@ app.put("/api/products/:id", async function (req, res) {
     try {
         const productId = req.params.id;
 
+        if (!mongoose.Types.ObjectId.isValid(productId)) {
+            return res.status(400).json({
+                message: "Invalid product id"
+            });
+        }
+
         const name = req.body.name;
         const price = Number(req.body.price);
-        const category = req.body.category;
+        const stock = Number(req.body.stock);
 
         if (!name || name.trim() === "") {
             return res.status(400).json({
@@ -354,9 +423,9 @@ app.put("/api/products/:id", async function (req, res) {
             });
         }
 
-        if (!category || category.trim() === "") {
+        if (isNaN(stock) || stock < 0) {
             return res.status(400).json({
-                message: "Product category is required"
+                message: "Valid product stock is required"
             });
         }
 
@@ -365,7 +434,7 @@ app.put("/api/products/:id", async function (req, res) {
             {
                 name: name.trim(),
                 price: price,
-                category: category.trim()
+                stock: stock
             },
             {
                 new: true,
@@ -395,6 +464,12 @@ app.put("/api/products/:id", async function (req, res) {
 app.delete("/api/products/:id", async function (req, res) {
     try {
         const productId = req.params.id;
+
+        if (!mongoose.Types.ObjectId.isValid(productId)) {
+            return res.status(400).json({
+                message: "Invalid product id"
+            });
+        }
 
         const deletedProduct = await Product.findByIdAndDelete(productId);
 
